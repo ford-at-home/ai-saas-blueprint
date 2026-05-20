@@ -1,0 +1,11 @@
+node_modules/
+dist/
+*.tsbuildinfo
+.env
+.env.local
+
+infra/cdk.out/
+infra/cdk.context.json
+
+.DS_Store
+*.log

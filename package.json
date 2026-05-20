@@ -1,0 +1,27 @@
+{
+  "name": "greenscreen",
+  "version": "0.1.0",
+  "private": true,
+  "description": "AI Workflow SaaS Blueprint - one cdk deploy per product",
+  "workspaces": [
+    "infra",
+    "packages/*",
+    "lambdas/*"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "synth": "cd infra && cdk synth",
+    "deploy": "cd infra && cdk deploy --all",
+    "diff": "cd infra && cdk diff",
+    "clean": "rm -rf infra/cdk.out && find . -name '*.tsbuildinfo' -delete"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.4",
+    "@types/node": "^20.14.10",
+    "@types/aws-lambda": "^8.10.145",
+    "esbuild": "^0.23.1"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
