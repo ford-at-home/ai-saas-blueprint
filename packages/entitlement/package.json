@@ -1,5 +1,5 @@
 {
-  "name": "@greenscreen/entitlement",
+  "name": "@ai-saas-blueprint/entitlement",
   "version": "0.1.0",
   "private": true,
   "main": "src/index.ts",
@@ -8,6 +8,6 @@
     "build": "tsc"
   },
   "dependencies": {
-    "@greenscreen/shared": "*"
+    "@ai-saas-blueprint/shared": "*"
   }
 }

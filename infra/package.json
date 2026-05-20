@@ -1,5 +1,5 @@
 {
-  "name": "@greenscreen/infra",
+  "name": "@ai-saas-blueprint/infra",
   "version": "0.1.0",
   "private": true,
   "main": "bin/app.js",
@@ -11,7 +11,7 @@
     "deploy": "cdk deploy"
   },
   "dependencies": {
-    "@greenscreen/shared": "*",
+    "@ai-saas-blueprint/shared": "*",
     "aws-cdk-lib": "^2.158.0",
     "constructs": "^10.3.0"
   },

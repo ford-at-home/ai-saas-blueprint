@@ -182,7 +182,7 @@ Once you have a real test suite (Phase 0 task 3):
 
 ```bash
 npm test                 # workspace-wide
-npm test -w @greenscreen/entitlement   # one package
+npm test -w @ai-saas-blueprint/entitlement   # one package
 ```
 
 ## 7. Add a Lambda dependency
@@ -191,7 +191,7 @@ Lambdas are bundled by NodejsFunction's esbuild. To add a runtime dependency:
 
 ```bash
 # at root, in workspace mode
-npm install --workspace=@greenscreen/entitlement @aws-sdk/client-dynamodb
+npm install --workspace=@ai-saas-blueprint/entitlement @aws-sdk/client-dynamodb
 ```
 
 esbuild will pull it into the bundle automatically. **Do NOT** mark AWS SDK v3 packages as external — Lambda's Node 20 runtime includes AWS SDK v3 in its environment, but the version may lag. Bundling is safer for reproducibility; the size hit is negligible at v1 volumes.
@@ -226,7 +226,7 @@ Run with `npx ts-node scratch/run-api.ts`. Put scratch scripts in a `scratch/` d
 | `cdk synth` says `Missing required context: app` | Forgot `-c app=<slug>` | Add the flag, or set in `cdk.json` `context` |
 | `Invalid app slug` | Uppercase or underscore in slug | Lowercase only, hyphens, 3-32 chars, leading letter |
 | `Cannot find module '../lib/foo.js'` | Used `.js` extension in `infra/*.ts` import | Drop the `.js` — infra is CommonJS, not ESM |
-| `Cannot find module '@greenscreen/shared'` | Workspace not installed | Run `npm install` from repo root |
+| `Cannot find module '@ai-saas-blueprint/shared'` | Workspace not installed | Run `npm install` from repo root |
 | `Resource handler returned message: "... already exists"` | Two deploys colliding on a global resource name | Check S3 bucket name (account-scoped global); pick a different app slug |
 | Webhook returns 401 for Stripe test events | Webhook secret in Secrets Manager doesn't match Stripe Dashboard | Update via `aws secretsmanager put-secret-value` per `deploy.md §2` |
 | Workflow run hangs in `pending` | Step Functions state machine failure | Check `/aws/vendedlogs/states/<app>-<env>-workflow` |

@@ -32,8 +32,8 @@ graph TB
     Config --> DataStack[DataStack<br/>DynamoDB table<br/>S3 artifacts bucket]
     Config --> AuthStack[AuthStack<br/>Cognito user pool<br/>App client]
     Config --> ApiStack[ApiStack<br/>HTTP API + JWT authorizer<br/>handler Lambda]
-    Config --> WorkflowStack[WorkflowStack<br/>Step Functions state machine<br/>workflow runner Lambda]
-    Config --> BillingStack[BillingStack<br/>Stripe webhook Lambda<br/>Function URL<br/>Secrets Manager secret]
+    Config --> WorkflowStack[WorkflowStack<br/>one state machine per workflow<br/>shared workflow runner Lambda]
+    Config --> BillingStack[BillingStack<br/>Stripe webhook Lambda<br/>Function URL + DLQ<br/>Secrets Manager secret]
 
     DataStack -.table.-> ApiStack
     DataStack -.table.-> WorkflowStack
@@ -165,7 +165,7 @@ graph LR
     RunnerL --> Shared
 ```
 
-Lambdas import workspace packages by name (`@greenscreen/shared`). NodejsFunction's esbuild bundling resolves them through npm workspace symlinks and tree-shakes unused exports. No build step needed before `cdk synth`.
+Lambdas import workspace packages by name (`@ai-saas-blueprint/shared`). NodejsFunction's esbuild bundling resolves them through npm workspace symlinks and tree-shakes unused exports. No build step needed before `cdk synth`.
 
 ## 5. Deploy flow
 

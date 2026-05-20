@@ -64,7 +64,7 @@ export class ApiStack extends Stack {
       apiName: `${props.config.appName}-${props.config.env}-api`,
       defaultAuthorizer: authorizer,
       corsPreflight: {
-        allowOrigins: ['*'],
+        allowOrigins: props.config.allowedOrigins,
         allowMethods: [apigwv2.CorsHttpMethod.ANY],
         allowHeaders: ['authorization', 'content-type'],
       },

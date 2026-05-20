@@ -18,13 +18,14 @@ No GSIs in v1. Add only when an access pattern can't be served by a `Query` on `
 Producing these by hand in handler code is a bug waiting to happen. Use the helpers in `packages/shared/src/index.ts`:
 
 ```ts
-import { Keys, currentBillingPeriod } from '@greenscreen/shared';
+import { Keys, currentBillingPeriod } from '@ai-saas-blueprint/shared';
 
 Keys.tenantMeta('t_01HX9')                  // { PK: 'TENANT#t_01HX9', SK: 'META' }
 Keys.tenantUser('t_01HX9', cognitoSub)      // { PK: 'TENANT#t_01HX9', SK: 'USER#<sub>' }
 Keys.workflowRun('t_01HX9', 'r_abc')        // { PK: 'TENANT#t_01HX9', SK: 'RUN#r_abc' }
 Keys.usageCounter('t_01HX9', '2026-05')     // { PK: 'TENANT#t_01HX9', SK: 'USAGE#2026-05' }
 Keys.stripeEvent('t_01HX9', 'evt_abc')      // { PK: 'TENANT#t_01HX9', SK: 'STRIPE_EVENT#evt_abc' }
+Keys.audit('t_01HX9', '2026-05-20T14:23:11Z') // { PK: 'TENANT#t_01HX9', SK: 'AUDIT#2026-05-20T14:23:11Z' }
 ```
 
 If you need a key shape not in this list, add it to `Keys` first, then use it. Centralization is the point.
@@ -93,7 +94,7 @@ One row per workflow execution. Written by the workflow runner, read by `GET /wo
 
 ### 3.4 Monthly usage counter (`USAGE#<yyyy-mm>`)
 
-Atomic counter incremented by `recordUsage`. Read by `canRunWorkflow` to enforce the monthly cap.
+Atomic counter incremented by `EntitlementProvider.reserveRun`. Read by `canRunWorkflow` (read-only preview) and updated conditionally by `reserveRun` (authoritative gate). See ADR 0002.
 
 ```jsonc
 {
@@ -104,7 +105,23 @@ Atomic counter incremented by `recordUsage`. Read by `canRunWorkflow` to enforce
 }
 ```
 
-Increment via `UpdateExpression: "ADD #count :delta"`. DynamoDB guarantees atomic semantics on `ADD` — no read-modify-write race.
+Increment via a single conditional `UpdateItem`:
+
+```jsonc
+{
+  "UpdateExpression": "ADD #count :delta SET lastUpdated = :now",
+  "ConditionExpression": "attribute_not_exists(PK) OR #count < :max",
+  "ExpressionAttributeNames": { "#count": "count" },
+  "ExpressionAttributeValues": {
+    ":delta": { "N": "1" },
+    ":max":   { "N": "<plan.maxRunsPerMonth>" },
+    ":now":   { "S": "<iso>" }
+  },
+  "ReturnValues": "UPDATED_NEW"
+}
+```
+
+A `ConditionalCheckFailedException` means quota is full; deny the run. `ReturnValues: UPDATED_NEW` gives the post-increment count so the caller can report `remaining`.
 
 ### 3.5 Stripe event idempotency token (`STRIPE_EVENT#<id>`)
 
@@ -123,6 +140,25 @@ Written by the webhook handler with `attribute_not_exists(SK)`. Duplicate delive
 
 TTL is set so the table doesn't accumulate event rows forever. Stripe retries for 3 days; 7 days is a comfortable margin.
 
+### 3.6 Audit row (`AUDIT#<iso-ts>`)
+
+Append-only forensic trail. Written when plan changes (Stripe webhook), manual overrides (admin tooling), or tenant deletion runs (see `docs/runbooks/tenant-deletion.md`). SK is the ISO-8601 timestamp so chronological ordering is free.
+
+```jsonc
+{
+  "PK": "TENANT#t_01HX9...",
+  "SK": "AUDIT#2026-05-20T14:23:11Z",
+  "action": "plan_changed",                    // free-form, machine-readable
+  "actor": "stripe_webhook | admin:<email> | system",
+  "from": { "planId": "free", "status": "active" },
+  "to":   { "planId": "pro",  "status": "active" },
+  "stripeEventId": "evt_1NXyz...",             // when triggered by Stripe
+  "ticket": "ZD-1234"                          // when triggered by ops
+}
+```
+
+No fixed schema beyond `PK`/`SK`/`action`/`actor`. Each writer decides which extra fields are useful for the kind of change being recorded.
+
 ## 4. Access patterns
 
 | Pattern | Operation | Notes |
@@ -131,8 +167,9 @@ TTL is set so the table doesn't accumulate event rows forever. Stripe retries fo
 | Read user → tenant mapping | `GetItem(TENANT#<known>, USER#<sub>)` | Only the pre-token Lambda knows the tenant; for raw login flows, see §5. |
 | List recent runs for a tenant | `Query(PK = TENANT#<id>, SK begins_with 'RUN#')` | Add `ScanIndexForward=false` for newest-first. |
 | List runs for one workflow | Same query + filter on `workflowId`. | If common, add a GSI on `(tenantId, workflowId)`. Not yet. |
-| Increment monthly counter | `UpdateItem(TENANT#<id>, USAGE#<yyyy-mm>) ADD count :1` | Atomic. No condition. |
-| Read current usage | `GetItem(TENANT#<id>, USAGE#<current-period>)` | Cache per warm Lambda for 30s. |
+| Reserve a workflow run (gate) | `UpdateItem(TENANT#<id>, USAGE#<yyyy-mm>) ADD count :1 ConditionExpression: 'attribute_not_exists(PK) OR #count < :max'` | Atomic + conditional. `ConditionalCheckFailedException` ⇒ quota exhausted. See ADR 0002. |
+| Read current usage (preview) | `GetItem(TENANT#<id>, USAGE#<current-period>)` | Stale by definition; only safe for UI. Cache per warm Lambda for 30s. |
+| Append an audit row | `PutItem(TENANT#<id>, AUDIT#<iso-ts>, ...)` | Never deleted by application code. |
 | Idempotently mark a Stripe event | `PutItem(... STRIPE_EVENT#<id>, ...) ConditionExpression: 'attribute_not_exists(SK)'` | Conditional check failure means duplicate. |
 | Find tenant by Stripe customer | **NOT YET INDEXED.** Webhook payload carries `client_reference_id = tenantId`. | When that's not enough (e.g., `invoice.*` events lack it), add a GSI. |
 

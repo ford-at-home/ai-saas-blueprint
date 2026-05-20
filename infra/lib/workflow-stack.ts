@@ -15,16 +15,24 @@ export interface WorkflowStackProps extends StackProps {
   config: AppConfig;
   table: dynamodb.Table;
   artifactsBucket: s3.Bucket;
+  /**
+   * Workflow identifiers to provision. In Phase 0 task 5 this list is
+   * derived from `workflows/<id>/workflow.yaml` discovery; today it's
+   * a single placeholder so the wiring (and SM IAM) is already shaped
+   * for multiple machines.
+   */
+  workflowIds?: string[];
 }
 
 /**
- * v1 workflow: a single Step Functions state machine that invokes the
- * configured Bedrock model. Real per-workflow state machines (loaded from
- * workflows/<id>/workflow.yaml) land in Phase 0 task 5; this is a placeholder
- * machine that proves the wiring + IAM.
+ * One Step Functions state machine per workflow id, plus a shared runner
+ * Lambda. The state machine's own role carries `bedrock:InvokeModel` so
+ * Phase 0 task 5 can switch the runner from Lambda-mediated calls to
+ * Step Functions' direct Bedrock SDK integration without re-plumbing IAM.
  */
 export class WorkflowStack extends Stack {
-  readonly stateMachine: sfn.StateMachine;
+  readonly stateMachines: Map<string, sfn.StateMachine>;
+  readonly runnerLambda: lambda.IFunction;
 
   constructor(scope: Construct, id: string, props: WorkflowStackProps) {
     super(scope, id, props);
@@ -42,41 +50,70 @@ export class WorkflowStack extends Stack {
         TABLE_NAME: props.table.tableName,
         ARTIFACTS_BUCKET: props.artifactsBucket.bucketName,
         BEDROCK_MODEL_ID: props.config.bedrockModelId,
+        ...(props.config.bedrockGuardrailId
+          ? { BEDROCK_GUARDRAIL_ID: props.config.bedrockGuardrailId }
+          : {}),
       },
       logGroup: new LogGroup(this, 'WorkflowRunnerLogs', {
         logGroupName: `/aws/lambda/${props.config.appName}-${props.config.env}-workflow-runner`,
         retention: RetentionDays.ONE_MONTH,
       }),
     });
+    this.runnerLambda = runnerLambda;
 
     props.table.grantReadWriteData(runnerLambda);
     props.artifactsBucket.grantReadWrite(runnerLambda);
-    runnerLambda.addToRolePolicy(new iam.PolicyStatement({
+    const bedrockPolicy = new iam.PolicyStatement({
       actions: ['bedrock:InvokeModel'],
-      resources: [`arn:aws:bedrock:${this.region}::foundation-model/${props.config.bedrockModelId}`],
-    }));
+      resources: [
+        `arn:aws:bedrock:${this.region}::foundation-model/${props.config.bedrockModelId}`,
+      ],
+    });
+    runnerLambda.addToRolePolicy(bedrockPolicy);
 
-    const runTask = new sfnTasks.LambdaInvoke(this, 'RunWorkflow', {
-      lambdaFunction: runnerLambda,
+    this.stateMachines = new Map();
+    const workflowIds = props.workflowIds ?? ['example'];
+    for (const workflowId of workflowIds) {
+      const machine = this.createWorkflowMachine(workflowId, runnerLambda, props);
+      // Phase 0 task 5: when SF directly invokes Bedrock, this is the role
+      // that needs the permission. Pre-attaching keeps that PR small.
+      machine.role.addToPrincipalPolicy(bedrockPolicy);
+      this.stateMachines.set(workflowId, machine);
+      new CfnOutput(this, `StateMachineArn_${sanitize(workflowId)}`, {
+        value: machine.stateMachineArn,
+      });
+    }
+  }
+
+  private createWorkflowMachine(
+    workflowId: string,
+    runner: lambda.IFunction,
+    props: WorkflowStackProps,
+  ): sfn.StateMachine {
+    const safe = sanitize(workflowId);
+    const runTask = new sfnTasks.LambdaInvoke(this, `RunWorkflow_${safe}`, {
+      lambdaFunction: runner,
       outputPath: '$.Payload',
     });
-
-    const definition = runTask.next(new sfn.Succeed(this, 'Done'));
-
-    this.stateMachine = new sfn.StateMachine(this, 'StateMachine', {
-      stateMachineName: `${props.config.appName}-${props.config.env}-workflow`,
-      definitionBody: sfn.DefinitionBody.fromChainable(definition),
+    return new sfn.StateMachine(this, `StateMachine_${safe}`, {
+      stateMachineName: `${props.config.appName}-${props.config.env}-wf-${safe}`,
+      definitionBody: sfn.DefinitionBody.fromChainable(
+        runTask.next(new sfn.Succeed(this, `Done_${safe}`)),
+      ),
       timeout: Duration.minutes(5),
       tracingEnabled: true,
       logs: {
-        destination: new LogGroup(this, 'StateMachineLogs', {
-          logGroupName: `/aws/vendedlogs/states/${props.config.appName}-${props.config.env}-workflow`,
+        destination: new LogGroup(this, `StateMachineLogs_${safe}`, {
+          logGroupName: `/aws/vendedlogs/states/${props.config.appName}-${props.config.env}-wf-${safe}`,
           retention: RetentionDays.ONE_MONTH,
         }),
         level: sfn.LogLevel.ALL,
       },
     });
-
-    new CfnOutput(this, 'StateMachineArn', { value: this.stateMachine.stateMachineArn });
   }
+}
+
+/** CDK construct ids and stack names disallow some characters; normalize. */
+function sanitize(workflowId: string): string {
+  return workflowId.replace(/[^a-zA-Z0-9]/g, '');
 }

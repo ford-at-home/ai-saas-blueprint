@@ -27,10 +27,13 @@ Ordered checklist. Each task is small enough to land in one PR. Items marked `[i
 
 ## 3. Entitlement layer [code]
 
-- [ ] Implement `StripeEntitlementProvider` per ADR 0002
-- [ ] Plan constants in `packages/shared`: free (50/mo), pro (5000/mo)
-- [ ] Monthly counter reset via EventBridge cron at `0 0 1 * ? *`
-- [ ] Unit tests with in-memory `EntitlementProvider` fake
+- [x] Define `EntitlementProvider` interface with atomic `reserveRun` (ADR 0002)
+- [x] `StripeEntitlementProvider` skeleton with `reserveCounter` DDB injection point
+- [x] Plan constants in `packages/shared`: free (50/mo), pro (5000/mo)
+- [ ] Wire `reserveCounter` to a real DynamoDB `UpdateItem` with `ConditionExpression: 'attribute_not_exists(PK) OR #count < :max'` (handle `ConditionalCheckFailedException`)
+- [ ] Implement `releaseRun` compensating decrement for failed state-machine starts
+- [ ] Monthly counter reset via EventBridge cron at `0 0 1 * ? *` (or rely on the `yyyy-mm` SK and let old counters sit)
+- [x] vitest + first unit test against in-memory `EntitlementProvider` fake
 
 ## 4. API (ApiStack) [infra] [code]
 
@@ -44,23 +47,30 @@ Ordered checklist. Each task is small enough to land in one PR. Items marked `[i
 
 ## 5. Workflow execution (WorkflowStack) [infra] [code]
 
-- [ ] Step Functions Standard state machine
-- [ ] Bedrock `InvokeModel` direct SDK integration
-- [ ] Result writes to `TENANT#<id> / RUN#<runId>` with status, output, token counts
-- [ ] Usage recorder triggered by `ExecutionSucceeded` EventBridge event
+- [x] Multi-workflow scaffold (one state machine per workflow id) with Bedrock policy pre-attached to the SF role
+- [x] Optional `bedrockGuardrailId` config knob; env var passed to runner when set (ADR 0007)
+- [x] `WorkflowRun.workflowVersion` field for capturing the yaml content hash
+- [ ] Step Functions Standard state machine with Bedrock `InvokeModel` direct integration (replace the placeholder LambdaInvoke)
+- [ ] Result writes to `TENANT#<id> / RUN#<runId>` with status, output, token counts, `workflowVersion`
+- [ ] Usage recorder triggered by `ExecutionSucceeded` EventBridge event (telemetry, not quota — see ADR 0002)
 - [ ] Hard timeout per execution (start: 5 minutes)
-- [ ] Load `workflows/<id>/workflow.yaml` at synth time, convert to ASL
+- [ ] Load `workflows/<id>/workflow.yaml` at synth time, compute version hash, convert to ASL
 
 ## 6. Billing (BillingStack) [infra] [code] [ops]
 
-- [ ] Secrets Manager secret holding `STRIPE_SECRET_KEY` + `STRIPE_WEBHOOK_SECRET` (one secret, two fields)
-- [ ] Stripe webhook Lambda with Function URL
-- [ ] Signature verification + 5-minute replay window
+- [x] Secrets Manager secret skeleton for `STRIPE_SECRET_KEY` + `STRIPE_WEBHOOK_SECRET`
+- [x] Stripe webhook Lambda with Function URL
+- [x] Reserved concurrency (10) on the webhook Lambda (ADR 0004)
+- [x] SQS DLQ provisioned with `sqs:SendMessage` grant + URL in env (ADR 0004)
+- [ ] [ops] Populate the secret: `aws secretsmanager put-secret-value --secret-id <arn> --secret-string '{"STRIPE_SECRET_KEY":"sk_test_...","STRIPE_WEBHOOK_SECRET":"whsec_..."}'`
+- [ ] Signature verification + 5-minute replay window in handler
 - [ ] Idempotency via `STRIPE_EVENT#<id>` rows
+- [ ] Audit row write (`AUDIT#<iso-ts>`) on every plan/status mutation
+- [ ] Handler enqueues to DLQ on give-up (not via Lambda destinations — Function URL is sync)
 - [ ] Handle: `checkout.session.completed`, `customer.subscription.updated`, `customer.subscription.deleted`
 - [ ] [ops] Stripe Dashboard: create products `free`, `pro`; create prices; copy IDs into `.env`/Secrets Manager
 - [ ] [ops] Register webhook URL (Function URL) in Stripe Dashboard
-- [ ] Smoke test: `stripe trigger checkout.session.completed`; confirm Tenants row updates
+- [ ] Smoke test: `stripe trigger checkout.session.completed`; confirm Tenants row updates and `AUDIT#` row appears
 
 ## 7. Observability [infra] [code]
 

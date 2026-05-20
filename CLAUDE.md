@@ -104,13 +104,26 @@ DynamoDB tables and S3 artifact buckets have `RemovalPolicy.RETAIN`. If you chan
 ## 5. Where things live
 
 ```
-greenscreen/
+ai-saas-blueprint/
 ├── CLAUDE.md                ← you are here
 ├── README.md                ← human quickstart
+├── LICENSE                  ← Apache-2.0
 ├── research.txt             ← original spec (source of truth for product intent)
 ├── ai-saas-workflow-blueprint-architecture.md  ← background research
+├── vitest.config.ts         ← test runner config
+├── .github/workflows/ci.yml ← synth + test on every PR
 ├── docs/
 │   ├── adr/                 ← locked decisions; cite by number in commits
+│   │   ├── 0001-v1-locked-decisions.md
+│   │   ├── 0002-entitlement-interface.md       ← atomic reserveRun gate
+│   │   ├── 0003-minimalist-paywall.md
+│   │   ├── 0004-stripe-webhook-hardening.md    ← reserved concurrency + DLQ
+│   │   ├── 0005-pricing-needs-validation.md    ← unit economics open question
+│   │   ├── 0006-streaming-deferred.md
+│   │   ├── 0007-bedrock-guardrails-stub.md
+│   │   └── 0008-typed-api-clients.md
+│   ├── runbooks/
+│   │   └── tenant-deletion.md  ← GDPR/CCPA delete path
 │   ├── architecture.md      ← system overview + Mermaid diagrams
 │   ├── data-model.md        ← DynamoDB schema + access patterns
 │   ├── security.md          ← defense-in-depth + threat model
@@ -125,12 +138,12 @@ greenscreen/
 │       ├── auth-stack.ts    ← Cognito user pool + app client
 │       ├── data-stack.ts    ← DynamoDB single table + S3 bucket
 │       ├── api-stack.ts     ← HTTP API + JWT authorizer + handler
-│       ├── workflow-stack.ts ← Step Functions + Bedrock IAM
-│       └── billing-stack.ts ← Stripe webhook Function URL + secret
+│       ├── workflow-stack.ts ← one SF state machine per workflow + Bedrock IAM
+│       └── billing-stack.ts ← Stripe webhook Function URL + secret + DLQ
 ├── packages/
 │   ├── shared/              ← types, plan constants, DDB key helpers
-│   ├── entitlement/         ← EntitlementProvider interface + Stripe impl
-│   └── workflow-engine/     ← WorkflowRunner shell (entitlement → SF start)
+│   ├── entitlement/         ← EntitlementProvider interface + Stripe impl + tests
+│   └── workflow-engine/     ← WorkflowRunner shell (reserveRun → SF start)
 ├── lambdas/
 │   ├── api/index.ts                ← Phase 0 placeholder
 │   ├── stripe-webhook/index.ts     ← Phase 0 placeholder

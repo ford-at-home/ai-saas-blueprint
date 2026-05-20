@@ -128,27 +128,29 @@ Picking this up cold? Read in this order:
 
 Reference:
 
-- [`docs/adr/0002-entitlement-interface.md`](docs/adr/0002-entitlement-interface.md) — abstraction that lets new billing channels land without touching the workflow engine
+- [`docs/adr/0002-entitlement-interface.md`](docs/adr/0002-entitlement-interface.md) — abstraction that lets new billing channels land without touching the workflow engine; defines the atomic `reserveRun` gate
 - [`docs/adr/0003-minimalist-paywall.md`](docs/adr/0003-minimalist-paywall.md) — exactly what v1 charges and how
+- [`docs/adr/0004-stripe-webhook-hardening.md`](docs/adr/0004-stripe-webhook-hardening.md) — reserved concurrency + DLQ
+- [`docs/adr/0005-pricing-needs-validation.md`](docs/adr/0005-pricing-needs-validation.md) — unit economics open question
+- [`docs/adr/0006-streaming-deferred.md`](docs/adr/0006-streaming-deferred.md) — why workflow output is batch-only in v1
+- [`docs/adr/0007-bedrock-guardrails-stub.md`](docs/adr/0007-bedrock-guardrails-stub.md) — wired but optional
+- [`docs/adr/0008-typed-api-clients.md`](docs/adr/0008-typed-api-clients.md) — zod schemas → OpenAPI (proposed)
 - [`docs/data-model.md`](docs/data-model.md) — DynamoDB schema and access patterns
 - [`docs/security.md`](docs/security.md) — defense-in-depth layers and threat model
 - [`docs/extending.md`](docs/extending.md) — recipes for adding workflows, billing channels, stacks
 - [`docs/deploy.md`](docs/deploy.md) — operational runbook
+- [`docs/runbooks/tenant-deletion.md`](docs/runbooks/tenant-deletion.md) — GDPR/CCPA tenant delete
 - [`research.txt`](research.txt) — original product spec
 - [`ai-saas-workflow-blueprint-architecture.md`](ai-saas-workflow-blueprint-architecture.md) — background research
 
 ## Verifying a fresh checkout
 
-Two synths with distinct slugs should produce two non-colliding sets of five stacks each:
-
 ```bash
 npm install
-cd infra
-npx cdk synth -c app=test-a --quiet | tail -3
-npx cdk synth -c app=test-b --quiet | tail -3
+npm run verify   # runs vitest + synths two distinct slugs
 ```
 
-Expected: stack names like `test-a-dev-Api`, `test-a-dev-Auth`, ... and `test-b-dev-Api`, `test-b-dev-Auth`, ... with no overlap.
+`npm run verify` runs the unit suite and then synthesizes against two distinct slugs (`verify-a`, `verify-b`) to confirm the stack sets are disjoint. The same command runs in CI on every PR (`.github/workflows/ci.yml`).
 
 ## License
 

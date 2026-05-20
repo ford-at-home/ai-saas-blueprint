@@ -1,5 +1,5 @@
 {
-  "name": "greenscreen",
+  "name": "ai-saas-blueprint",
   "version": "0.1.0",
   "private": true,
   "description": "AI Workflow SaaS Blueprint - one cdk deploy per product",
@@ -13,13 +13,18 @@
     "synth": "cd infra && cdk synth",
     "deploy": "cd infra && cdk deploy --all",
     "diff": "cd infra && cdk diff",
-    "clean": "rm -rf infra/cdk.out && find . -name '*.tsbuildinfo' -delete"
+    "clean": "rm -rf infra/cdk.out && find . -name '*.tsbuildinfo' -delete",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "verify:synth": "cd infra && cdk synth -c app=verify-a --quiet > /dev/null && cdk synth -c app=verify-b --quiet > /dev/null",
+    "verify": "npm run test && npm run verify:synth"
   },
   "devDependencies": {
     "typescript": "^5.5.4",
     "@types/node": "^20.14.10",
     "@types/aws-lambda": "^8.10.145",
-    "esbuild": "^0.23.1"
+    "esbuild": "^0.23.1",
+    "vitest": "^2.1.1"
   },
   "engines": {
     "node": ">=20"

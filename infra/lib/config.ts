@@ -7,10 +7,20 @@ export interface AppConfig {
   env: string;
   /** Bedrock model invoked by workflows in this deploy. */
   bedrockModelId: string;
+  /**
+   * Optional Bedrock Guardrail identifier applied to every workflow
+   * invocation. ADR 0007. Absent = no Guardrail (current default).
+   */
+  bedrockGuardrailId?: string;
   /** Plan assigned to a tenant at signup. */
   defaultPlan: 'free' | 'pro';
   /** Triggers a CloudWatch alarm when monthly spend crosses this (USD). */
   monthlySpendAlarmUsd: number;
+  /**
+   * CORS allowed origins for the HTTP API. Default `['*']` for local
+   * development. Lock down to your real frontend origin before going live.
+   */
+  allowedOrigins: string[];
 }
 
 const SLUG_RE = /^[a-z][a-z0-9-]{1,30}[a-z0-9]$/;
@@ -28,16 +38,25 @@ export function loadConfig(app: App): AppConfig {
     );
   }
 
+  const allowedOriginsRaw = app.node.tryGetContext('allowedOrigins');
+  const allowedOrigins: string[] = Array.isArray(allowedOriginsRaw)
+    ? allowedOriginsRaw
+    : typeof allowedOriginsRaw === 'string'
+      ? allowedOriginsRaw.split(',').map((s) => s.trim()).filter(Boolean)
+      : ['*'];
+
   return {
     appName,
     env: app.node.tryGetContext('env') ?? 'dev',
     bedrockModelId:
       app.node.tryGetContext('bedrockModelId') ??
       'anthropic.claude-3-5-sonnet-20241022-v2:0',
+    bedrockGuardrailId: app.node.tryGetContext('bedrockGuardrailId') ?? undefined,
     defaultPlan: (app.node.tryGetContext('defaultPlan') ?? 'free') as 'free' | 'pro',
     monthlySpendAlarmUsd: Number(
       app.node.tryGetContext('monthlySpendAlarmUsd') ?? 100,
     ),
+    allowedOrigins,
   };
 }
 

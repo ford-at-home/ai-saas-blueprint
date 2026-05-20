@@ -45,6 +45,12 @@ export interface WorkflowRun {
   tenantId: string;
   runId: string;
   workflowId: string;
+  /**
+   * Content hash of `workflows/<id>/workflow.yaml` at run time.
+   * Captured so historical runs remain interpretable after the workflow
+   * definition changes. Populated by the WorkflowRunner in Phase 0 task 5.
+   */
+  workflowVersion?: string;
   status: 'pending' | 'running' | 'succeeded' | 'failed';
   startedAt: string;
   finishedAt?: string;
@@ -73,6 +79,14 @@ export const Keys = {
   stripeEvent: (tenantId: string, eventId: string) => ({
     PK: `TENANT#${tenantId}`,
     SK: `STRIPE_EVENT#${eventId}`,
+  }),
+  /**
+   * Append-only audit trail. Use ISO-8601 timestamps so SK sorts chronologically.
+   * Written by: webhook handler on plan changes, admin tools on manual overrides.
+   */
+  audit: (tenantId: string, isoTs: string) => ({
+    PK: `TENANT#${tenantId}`,
+    SK: `AUDIT#${isoTs}`,
   }),
 } as const;
 
