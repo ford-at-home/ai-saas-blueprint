@@ -1,0 +1,1017 @@
+## The cleanest blueprint: **“SaaS workflow kit on AWS”**
+
+Build a reusable starter that deploys:
+
+1. **A logged-in web app**
+2. **A tenant-aware workflow/chatbot backend**
+3. **A paywall**
+4. **Usage metering**
+5. **Admin/onboarding flows**
+6. **A CDK deploy command that stamps out the whole thing**
+
+Humans did invent billing, identity, permissions, and compliance just to make “simple chatbot with a paywall” require an architecture review. Magnificent species.
+
+---
+
+## The product shape
+
+### What you are selling
+
+A clonable AWS-deployed AI workflow product:
+
+> “Bring your own prompt/workflow, deploy a tenant-aware AI app with login, payment, usage limits, audit logs, and optional AWS Marketplace billing.”
+
+Think of it like a **SaaS factory for AI workflows**.
+
+Each cloned app could be:
+
+* A chatbot
+* A document-processing workflow
+* A deep research workflow
+* A GitHub issue-to-PR agent
+* A claims/insurance assistant
+* A civic hackathon judging assistant
+* A customer-support bot
+* A Slack/Telegram workflow runner
+
+The key is that the **business shell stays the same**. Only the workflow definition changes.
+
+---
+
+# Recommended architecture
+
+## 1. Frontend
+
+Use:
+
+* **React**
+* **AWS Amplify Hosting**
+* **Cognito-hosted login**
+* Tenant-aware route structure:
+
+  * `app.yourdomain.com`
+  * `tenant.yourdomain.com`
+  * or `/t/{tenantSlug}`
+
+Frontend screens:
+
+| Screen                            | Purpose                            |
+| --------------------------------- | ---------------------------------- |
+| Landing page                      | Marketing and pricing              |
+| Register                          | User signup                        |
+| Marketplace registration callback | AWS Marketplace buyer onboarding   |
+| App dashboard                     | Workflow launcher                  |
+| Chat/workflow screen              | Main product UX                    |
+| Billing/settings                  | Subscription, usage, tenant config |
+| Admin console                     | Tenant/user/workflow management    |
+
+Given your usual stack, this fits cleanly with React + Amplify + API Gateway + Lambda + DynamoDB. Conveniently, for once the existing preference is the sane path. Stunning.
+
+---
+
+## 2. Auth and tenant identity
+
+Use **Amazon Cognito** for the first version.
+
+Core entities:
+
+```text
+Tenant
+  tenantId
+  name
+  slug
+  plan
+  billingProvider
+  marketplaceCustomerId
+  marketplaceProductCode
+  status
+
+User
+  userId
+  email
+  tenantId
+  role
+```
+
+Cognito JWT should include:
+
+```json
+{
+  "sub": "user-id",
+  "email": "user@example.com",
+  "custom:tenant_id": "tenant-abc",
+  "custom:role": "admin"
+}
+```
+
+AWS’s SaaS identity guidance commonly uses claims in JWTs to carry tenant information, and the AWS Cognito SaaS Quick Start described tenant attributes being packaged into JWT claims for downstream isolation decisions. ([Amazon Web Services, Inc.][1])
+
+### My recommendation
+
+Start with:
+
+```text
+One Cognito User Pool
+One app client
+Tenant ID stored as a custom claim / app metadata
+Tenant isolation enforced in Lambda + DynamoDB condition logic
+```
+
+Do **not** start with one Cognito pool per tenant unless enterprise SSO/custom branding becomes a real requirement. That road leads to yak shaving, and the yak has opinions.
+
+---
+
+## 3. API layer
+
+Use:
+
+* **API Gateway REST API**
+* **Lambda authorizer or Cognito authorizer**
+* **Lambda handlers**
+* **DynamoDB**
+* **S3 for artifacts**
+* **EventBridge for workflow events**
+* **SQS for async jobs**
+* **Step Functions for multi-step workflows**
+
+Basic flow:
+
+```text
+User logs in
+  ↓
+Frontend calls API Gateway
+  ↓
+JWT is validated
+  ↓
+Lambda extracts tenantId
+  ↓
+Entitlement check runs
+  ↓
+Workflow starts
+  ↓
+Usage is recorded
+  ↓
+Result stored in S3/DynamoDB
+```
+
+---
+
+## 4. Workflow execution
+
+Define each workflow as a declarative config.
+
+Example:
+
+```yaml
+id: support-chatbot
+name: Support Chatbot
+type: chatbot
+
+inputs:
+  - name: message
+    type: string
+
+model:
+  provider: bedrock
+  model_id: anthropic.claude-3-5-sonnet
+
+tools:
+  - name: knowledge_base_search
+  - name: ticket_lookup
+
+limits:
+  free:
+    max_messages_per_month: 50
+  pro:
+    max_messages_per_month: 5000
+  enterprise:
+    max_messages_per_month: 100000
+
+outputs:
+  storage: dynamodb
+  artifacts: s3
+```
+
+For longer workflows:
+
+```yaml
+id: deep-research-job
+type: step_function
+
+steps:
+  - name: intake
+    handler: lambdas/intake.handler
+  - name: search
+    handler: lambdas/search.handler
+  - name: synthesize
+    handler: lambdas/synthesize.handler
+  - name: export
+    handler: lambdas/export.handler
+```
+
+This lets you clone the SaaS shell and swap only the workflow file. That is the productizable part.
+
+---
+
+# The paywall: three viable versions
+
+## Option A: Stripe-first paywall
+
+This is the easiest.
+
+```text
+User signs up
+  ↓
+Stripe Checkout
+  ↓
+Webhook updates tenant plan
+  ↓
+App checks tenant entitlement before workflow runs
+```
+
+Pros:
+
+* Fastest to build
+* Best for non-AWS buyers
+* Easier pricing experiments
+* Easier coupons/trials/self-serve
+
+Cons:
+
+* Not native AWS Marketplace
+* Enterprise AWS buyers may prefer Marketplace procurement
+
+Use this first unless AWS Marketplace is the whole point.
+
+---
+
+## Option B: AWS Marketplace-first paywall
+
+This is the more “sell to AWS customers” version.
+
+AWS Marketplace SaaS products work like this: the customer subscribes in AWS Marketplace, then AWS redirects them to a registration landing page that you own, where you create/configure their SaaS account. ([AWS Documentation][2])
+
+The registration page receives a temporary `x-amzn-marketplace-token`; your app exchanges that token with `ResolveCustomer`, gets Marketplace customer/account/product identifiers, and then checks entitlements with the AWS Marketplace Entitlement Service. ([AWS Documentation][3])
+
+Flow:
+
+```text
+Buyer clicks Subscribe in AWS Marketplace
+  ↓
+AWS redirects to your registration URL
+  ↓
+Your app receives x-amzn-marketplace-token
+  ↓
+Backend calls ResolveCustomer
+  ↓
+Backend calls GetEntitlements
+  ↓
+Tenant is created
+  ↓
+User creates app account
+  ↓
+Tenant plan is activated
+```
+
+AWS Marketplace supports SaaS subscriptions/PAYG and SaaS contracts; for contract pricing, customers purchase upfront entitlements, and your app verifies those entitlements through the Entitlement Service. ([AWS Documentation][4])
+
+Important current wrinkle: AWS documentation says new SaaS products have changing integration requirements starting **June 1, 2026** for Concurrent Agreements, so anything you design now should support multiple purchases of the same product on one AWS account. ([AWS Documentation][3])
+
+Pros:
+
+* Better for enterprise procurement
+* Customers can buy through AWS
+* Feels serious, because apparently procurement departments require ritual sacrifice
+
+Cons:
+
+* More integration work
+* Marketplace listing approval/testing
+* More edge cases
+* Your app still needs its own registration/login/onboarding
+
+---
+
+## Option C: Hybrid paywall
+
+Best long-term version.
+
+```text
+billingProvider = stripe | aws_marketplace | manual_enterprise
+```
+
+Same entitlement interface:
+
+```ts
+interface EntitlementProvider {
+  getTenantPlan(tenantId: string): Promise<TenantPlan>
+  canRunWorkflow(tenantId: string, workflowId: string): Promise<boolean>
+  recordUsage(tenantId: string, usage: UsageEvent): Promise<void>
+}
+```
+
+Then implement:
+
+```text
+StripeEntitlementProvider
+MarketplaceEntitlementProvider
+ManualEnterpriseEntitlementProvider
+```
+
+Your workflow engine does not care who paid. It only asks:
+
+```text
+Is this tenant active?
+What plan do they have?
+How much usage remains?
+Can they run this workflow?
+```
+
+That is the abstraction you want.
+
+---
+
+# Multi-tenancy model
+
+## Start pooled, add silo later
+
+### Pooled model
+
+All tenants share infrastructure.
+
+```text
+DynamoDB table:
+PK = TENANT#{tenantId}
+SK = WORKFLOW#{workflowId}#RUN#{runId}
+```
+
+Example tables:
+
+| Table          | Purpose                         |
+| -------------- | ------------------------------- |
+| `Tenants`      | Tenant metadata, billing status |
+| `Users`        | User-to-tenant mapping          |
+| `WorkflowRuns` | Execution history               |
+| `UsageLedger`  | Billable usage events           |
+| `Artifacts`    | S3 object references            |
+| `Entitlements` | Cached plan/limits              |
+| `AuditLog`     | Security/admin events           |
+
+Every record must carry `tenantId`.
+
+Every API call must derive `tenantId` from the authenticated identity, not from user-submitted body params. Because letting users tell you which tenant they belong to is how we get security incident retrospectives with sad fonts.
+
+---
+
+## Tenant isolation rules
+
+Use these rules everywhere:
+
+```text
+1. tenantId comes from trusted JWT/session context
+2. tenantId is required on every database key
+3. Lambda never accepts tenantId from request body as authority
+4. all queries are tenant-scoped
+5. usage, logs, artifacts, and workflow runs are tenant-scoped
+6. admin APIs require role checks
+```
+
+AWS’s SaaS reference architectures demonstrate both pooled and siloed isolation patterns, including tenant-aware JWT context, DynamoDB partitioning, and stronger per-tenant isolation models when needed. ([DeepWiki][5])
+
+---
+
+# “One-click deploy” model
+
+There are really **three** one-clicks.
+
+## 1. Developer one-click
+
+For you or another builder:
+
+```bash
+npx create-ai-workflow-saas my-product
+cd my-product
+pnpm install
+pnpm cdk deploy
+```
+
+Or:
+
+```bash
+make deploy
+```
+
+This deploys:
+
+```text
+Cognito
+API Gateway
+Lambda
+DynamoDB
+S3
+Step Functions
+EventBridge
+CloudWatch dashboards
+Amplify app
+Marketplace callback endpoint
+Stripe webhook endpoint
+Admin bootstrap user
+```
+
+## 2. Customer one-click
+
+For an AWS buyer:
+
+```text
+Subscribe on AWS Marketplace
+  ↓
+Redirect to registration page
+  ↓
+Create admin account
+  ↓
+Tenant provisioned
+  ↓
+Use app
+```
+
+AWS Marketplace handles the order/subscription motion, but your app still has to own account registration and tenant provisioning after redirect. ([AWS Documentation][2])
+
+## 3. Workflow one-click
+
+For you creating another product:
+
+```bash
+pnpm workflow:add support-chatbot
+pnpm cdk deploy
+```
+
+Or drop in:
+
+```text
+/workflows/support-chatbot/workflow.yaml
+/workflows/support-chatbot/system-prompt.md
+/workflows/support-chatbot/tools.ts
+/workflows/support-chatbot/ui.tsx
+```
+
+Then the platform discovers it and exposes it in the app.
+
+---
+
+# Suggested repo structure
+
+```text
+ai-workflow-saas-blueprint/
+  apps/
+    web/
+      src/
+        pages/
+        components/
+        workflows/
+    admin/
+      src/
+
+  packages/
+    workflow-engine/
+      src/
+        WorkflowRunner.ts
+        EntitlementGuard.ts
+        UsageRecorder.ts
+        ToolRegistry.ts
+
+    billing/
+      src/
+        EntitlementProvider.ts
+        StripeProvider.ts
+        AwsMarketplaceProvider.ts
+        ManualProvider.ts
+
+    auth/
+      src/
+        tenantContext.ts
+        roles.ts
+
+    ui/
+      src/
+
+  infra/
+    bin/
+      app.ts
+    lib/
+      SaaSCoreStack.ts
+      AuthStack.ts
+      ApiStack.ts
+      DataStack.ts
+      WorkflowStack.ts
+      BillingStack.ts
+      ObservabilityStack.ts
+      MarketplaceStack.ts
+
+  workflows/
+    support-chatbot/
+      workflow.yaml
+      system-prompt.md
+      tools.ts
+      schema.json
+
+    document-review/
+      workflow.yaml
+      system-prompt.md
+      tools.ts
+      schema.json
+
+  lambdas/
+    api/
+    workflow-runner/
+    marketplace-callback/
+    stripe-webhook/
+    usage-metering/
+
+  docs/
+    marketplace-listing.md
+    tenant-isolation.md
+    deployment.md
+    pricing.md
+```
+
+---
+
+# Core services to deploy with CDK
+
+## `SaaSCoreStack`
+
+Creates shared naming, domains, config, secrets, environment.
+
+## `AuthStack`
+
+Creates:
+
+* Cognito User Pool
+* User Pool Client
+* Groups: `tenant_admin`, `user`, `platform_admin`
+* Optional Hosted UI domain
+* JWT claims mapping
+
+## `DataStack`
+
+Creates:
+
+* Tenants table
+* Users table
+* Workflow runs table
+* Usage ledger table
+* Audit log table
+* S3 bucket for artifacts
+
+## `ApiStack`
+
+Creates:
+
+* API Gateway
+* Authorizers
+* Lambda integrations
+* Tenant context middleware
+
+## `WorkflowStack`
+
+Creates:
+
+* Workflow runner Lambda
+* Step Functions state machines
+* SQS queues
+* EventBridge bus
+* Bedrock permissions
+
+## `BillingStack`
+
+Creates:
+
+* Stripe webhook endpoint
+* Billing portal endpoint
+* Entitlements cache table
+* Usage reconciliation job
+
+## `MarketplaceStack`
+
+Creates:
+
+* Registration callback endpoint
+* Marketplace token resolver Lambda
+* Entitlement sync Lambda
+* SNS/SQS subscription-event handling
+
+AWS Marketplace SaaS products use Metering and Entitlement APIs to keep billing/reporting accurate, and the docs explicitly distinguish between metering for SaaS subscriptions/PAYG and entitlement checks for contract-based products. ([AWS Documentation][6])
+
+---
+
+# Paywall implementation
+
+## Entitlement check before every workflow run
+
+Pseudo-code:
+
+```ts
+export async function startWorkflow(request, context) {
+  const tenantId = context.auth.tenantId;
+  const workflowId = request.pathParameters.workflowId;
+
+  const entitlement = await entitlementService.getEntitlement({
+    tenantId,
+    workflowId,
+  });
+
+  if (!entitlement.active) {
+    throw new ForbiddenError("Subscription inactive");
+  }
+
+  if (entitlement.remainingRuns <= 0) {
+    throw new PaymentRequiredError("Usage limit reached");
+  }
+
+  const run = await workflowRunner.start({
+    tenantId,
+    userId: context.auth.userId,
+    workflowId,
+    input: request.body,
+  });
+
+  await usageLedger.record({
+    tenantId,
+    workflowId,
+    runId: run.runId,
+    unit: "workflow_run",
+    quantity: 1,
+  });
+
+  return run;
+}
+```
+
+## Usage ledger
+
+Record every billable thing:
+
+```json
+{
+  "tenantId": "tenant_123",
+  "eventId": "usage_abc",
+  "workflowId": "support-chatbot",
+  "runId": "run_789",
+  "unit": "message",
+  "quantity": 1,
+  "model": "claude-3-5-sonnet",
+  "inputTokens": 1200,
+  "outputTokens": 300,
+  "createdAt": "2026-05-19T12:00:00Z"
+}
+```
+
+Then your plan logic can support:
+
+* Runs per month
+* Messages per month
+* Token budget
+* Seat count
+* Workflow-specific access
+* Premium tool access
+* BYO Bedrock key later
+
+---
+
+# Pricing model
+
+Start simple.
+
+| Plan       |      Price | Limits                                |
+| ---------- | ---------: | ------------------------------------- |
+| Free       |         $0 | 50 messages/month, 1 workflow         |
+| Pro        |  $49/month | 5,000 messages/month, 3 workflows     |
+| Team       | $199/month | 25,000 messages/month, 10 seats       |
+| Enterprise |     Custom | SSO, private workflows, higher limits |
+
+For AWS Marketplace, map this to:
+
+```text
+SaaS contract dimensions:
+- Seats
+- Workflow runs
+- Premium workflows
+- Token packs
+```
+
+Or PAYG:
+
+```text
+Metered dimensions:
+- workflow_run
+- message
+- document_page
+- research_job
+```
+
+Do not over-engineer pricing at first. Usage-based pricing sounds elegant until customers ask what a “workflow unit” is and everyone enters the swamp.
+
+---
+
+# Minimum viable blueprint
+
+## MVP v1: Stripe SaaS shell
+
+Build this first:
+
+```text
+React app
+Cognito login
+Tenant table
+Stripe checkout
+Stripe webhook
+Entitlement table
+One chatbot workflow
+Usage limits
+Admin dashboard
+CDK deploy
+```
+
+That gives you a real product shell.
+
+## MVP v2: AWS Marketplace adapter
+
+Add:
+
+```text
+Marketplace registration landing page
+ResolveCustomer integration
+GetEntitlements integration
+Marketplace customer mapping
+Subscription/entitlement sync
+Marketplace-specific tenant onboarding
+```
+
+## MVP v3: Workflow marketplace/plugin system
+
+Add:
+
+```text
+workflow.yaml registry
+tool registry
+prompt registry
+per-workflow pricing
+workflow templates
+one-command workflow packaging
+```
+
+---
+
+# The actual spec
+
+## Product name
+
+**AI Workflow SaaS Blueprint**
+
+## Goal
+
+Create a reusable AWS CDK blueprint that deploys a multi-tenant, paywalled AI workflow application. The blueprint should allow a builder to define a new AI workflow, deploy it to AWS, onboard customers, enforce usage limits, and optionally sell through AWS Marketplace.
+
+## Non-goals for v1
+
+* Full enterprise SSO
+* Per-tenant VPC isolation
+* BYO cloud account deployment
+* Complex reseller billing
+* White-label custom domains
+* Marketplace-only launch
+
+Those are real, but they are also how projects become abandoned temples.
+
+---
+
+# Main user stories
+
+## Builder
+
+```text
+As a builder,
+I want to define an AI workflow in a config file,
+so that I can deploy a new SaaS product without rebuilding auth, billing, and tenant management.
+```
+
+## Tenant admin
+
+```text
+As a tenant admin,
+I want to create an account, invite users, and manage billing,
+so that my organization can use the AI workflow product.
+```
+
+## End user
+
+```text
+As an end user,
+I want to run a chatbot or workflow after login,
+so that I can get task-specific AI help.
+```
+
+## Marketplace buyer
+
+```text
+As an AWS Marketplace buyer,
+I want to subscribe through AWS Marketplace and land in the app registration flow,
+so that procurement and billing happen through AWS.
+```
+
+---
+
+# Critical backend APIs
+
+```text
+POST /tenants
+GET /tenants/me
+POST /users/invite
+GET /workflows
+POST /workflows/{workflowId}/runs
+GET /workflows/{workflowId}/runs/{runId}
+GET /usage
+GET /billing/session
+POST /billing/webhook/stripe
+POST /marketplace/register
+POST /marketplace/entitlements/sync
+```
+
+---
+
+# Deployment command
+
+Target developer experience:
+
+```bash
+git clone git@github.com:your-org/ai-workflow-saas-blueprint.git
+cd ai-workflow-saas-blueprint
+
+cp .env.example .env
+pnpm install
+pnpm cdk bootstrap
+pnpm cdk deploy --all
+```
+
+Then:
+
+```bash
+pnpm create-workflow support-chatbot
+pnpm cdk deploy WorkflowStack
+```
+
+---
+
+# CDK context config
+
+```json
+{
+  "appName": "support-chatbot-saas",
+  "domainName": "example.com",
+  "billingProvider": "stripe",
+  "enableMarketplace": false,
+  "enableBedrock": true,
+  "tenantIsolationMode": "pooled",
+  "defaultPlan": "free"
+}
+```
+
+For AWS Marketplace:
+
+```json
+{
+  "billingProvider": "aws_marketplace",
+  "enableMarketplace": true,
+  "marketplaceProductCode": "prod-abc123",
+  "supportConcurrentAgreements": true
+}
+```
+
+---
+
+# The biggest design decision
+
+## Do not make AWS Marketplace the only paywall at first
+
+Use this interface:
+
+```text
+App Entitlement Layer
+  ├── Stripe Adapter
+  ├── AWS Marketplace Adapter
+  └── Manual Enterprise Adapter
+```
+
+That gives you flexibility.
+
+The workflow engine only talks to the entitlement layer.
+
+That means the same chatbot can be sold:
+
+* Directly with Stripe
+* Through AWS Marketplace
+* Manually to an enterprise customer
+* Internally as a private tool
+
+That is the move.
+
+---
+
+# Final recommended build sequence
+
+## Phase 1: SaaS shell
+
+Build the reusable app shell:
+
+```text
+Auth
+Tenant management
+Billing abstraction
+Usage ledger
+Entitlement checks
+Admin dashboard
+CDK deployment
+```
+
+## Phase 2: First workflow
+
+Add one simple chatbot:
+
+```text
+Prompt config
+Bedrock call
+Conversation history
+Usage recording
+Plan enforcement
+```
+
+## Phase 3: Stripe paywall
+
+Add:
+
+```text
+Checkout
+Subscription webhook
+Plan updates
+Usage limits
+Billing portal
+```
+
+## Phase 4: AWS Marketplace
+
+Add:
+
+```text
+Marketplace registration URL
+ResolveCustomer
+GetEntitlements
+Customer mapping
+Entitlement sync
+Concurrent Agreements readiness
+```
+
+## Phase 5: Productize the blueprint
+
+Add:
+
+```text
+CLI scaffolder
+workflow template generator
+docs
+example apps
+pricing templates
+deployment guide
+security checklist
+marketplace listing guide
+```
+
+---
+
+## The blunt answer
+
+The easiest serious version is:
+
+```text
+AWS CDK blueprint
++ React/Amplify frontend
++ Cognito auth
++ API Gateway/Lambda backend
++ DynamoDB tenant model
++ S3 artifacts
++ Step Functions workflow engine
++ Stripe first
++ AWS Marketplace adapter second
++ entitlement abstraction from day one
+```
+
+Do **not** start by trying to make AWS Marketplace, tenant isolation, workflow plugins, auth, billing, and AI orchestration all perfect at once. That is how architecture becomes a compost pile with diagrams.
+
+Build the **paywalled SaaS shell** first. Then every AI workflow becomes a plugin.
+
+[1]: https://aws.amazon.com/about-aws/whats-new/2017/10/use-new-quick-start-to-deploy-a-saas-identity-and-isolation-solution-with-amazon-cognito-in-the-aws-cloud/?utm_source=chatgpt.com "Use New Quick Start to Deploy a SaaS Identity and Isolation Solution with Amazon Cognito in the AWS Cloud - AWS"
+[2]: https://docs.aws.amazon.com/marketplace/latest/userguide/saas-product-customer-setup.html?utm_source=chatgpt.com "Onboarding customers to your SaaS product through AWS Marketplace - AWS Marketplace"
+[3]: https://docs.aws.amazon.com/marketplace/latest/userguide/saas-integrate-contract.html?utm_source=chatgpt.com "Integrating your SaaS contract product with AWS Marketplace - AWS Marketplace"
+[4]: https://docs.aws.amazon.com/marketplace/latest/userguide/saas-contracts.html?utm_source=chatgpt.com "Pricing for SaaS contracts - AWS Marketplace"
+[5]: https://deepwiki.com/aws-samples/aws-saas-factory-eks-reference-architecture/1-overview?utm_source=chatgpt.com "aws-samples/aws-saas-factory-eks-reference-architecture | DeepWiki"
+[6]: https://docs.aws.amazon.com/marketplace/latest/userguide/saas-integration-metering-and-entitlement-apis.html?utm_source=chatgpt.com "Accessing the AWS Marketplace Metering and Entitlement Service APIs - AWS Marketplace"
+

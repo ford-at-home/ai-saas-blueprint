@@ -1,0 +1,21 @@
+id: example-chatbot
+name: Example Chatbot
+description: |
+  Minimal single-turn chatbot workflow. The runner loads system-prompt.md,
+  appends the user message, and invokes the configured Bedrock model.
+type: chatbot
+
+inputs:
+  - name: message
+    type: string
+    required: true
+
+model:
+  provider: bedrock
+  model_id: anthropic.claude-3-5-sonnet-20241022-v2:0
+  max_tokens: 1024
+  temperature: 0.2
+
+outputs:
+  storage: dynamodb
+  artifacts: s3

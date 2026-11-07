@@ -1,0 +1,13 @@
+{
+  "name": "@ai-saas-blueprint/entitlement",
+  "version": "0.1.0",
+  "private": true,
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "scripts": {
+    "build": "tsc"
+  },
+  "dependencies": {
+    "@ai-saas-blueprint/shared": "*"
+  }
+}
